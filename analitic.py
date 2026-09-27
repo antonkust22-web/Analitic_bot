@@ -120,10 +120,17 @@ async def get_ai_response(prompt: str) -> str:
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7
         )
-        return response.choices.message.content
+        reply = response.choices.message.content
+        
+        # Строгая проверка: если в ответе ИИ содержится HTML-код ошибки ProxyAPI
+        if "next-error-h1" in reply or "404" in reply or "page could not be found" in reply.lower():
+            return "❌ <i>Не оплачено / Нет доступа к ИИ (проверьте баланс в ProxyAPI)</i>"
+            
+        return reply
     except Exception as e:
-        logging.error(f"Ошибка ИИ (возможно, нет оплаты): {e}")
+        logging.error(f"Ошибка ИИ: {e}")
         return "❌ <i>Не оплачено / Нет доступа к ИИ (проверьте баланс в ProxyAPI)</i>"
+
 
 # Команда /start
 @dp.message(CommandStart())
