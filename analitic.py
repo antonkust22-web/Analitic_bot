@@ -10,6 +10,7 @@ REQUIRED_PACKAGES = {
     "yookassa": "yookassa",
     "openai": "openai",
     "aiogram_calendar": "aiogram-calendar==0.5.0",
+    "pandas": "pandas",  
     "matplotlib": "matplotlib"  # Для генерации фото с графиком
 }
 
@@ -94,10 +95,51 @@ def get_main_keyboard():
             [KeyboardButton(text="📊 Статистика + Анализ ИИ")],
             [KeyboardButton(text="📈 Визуальный график недели")],
             [KeyboardButton(text="📅 Календарь (День + Анализ)")],
-            [KeyboardButton(text="👥 Ввести кол-во пользователей")]
+            [KeyboardButton(text="👥 Ввести кол-во пользователей")],
+            [KeyboardButton(text="📥 Выгрузить отчет для Google Таблиц")],
+            [KeyboardButton(text="📢 Добавить закупку рекламы")]
         ],
         resize_keyboard=True
     )
+
+
+
+
+
+
+class AdStates(StatesGroup):
+    waiting_for_channel = State()
+    waiting_for_subs = State()
+    waiting_for_cost = State()
+
+# Функция получения рекламы для ИИ
+def get_active_ads_context(now_date):
+    if "ads" not in db:
+        db["ads"] = []
+    
+    active_ads_text = "Данные по купленной рекламе за последнее время:\n"
+    has_ads = False
+    
+    for ad in db["ads"]:
+        ad_date = datetime.datetime.strptime(ad["date"], "%Y-%m-%d")
+        # Проверяем 5-дневный промежуток мониторинга рекламы
+        days_passed = (now_date - ad_date).days
+        if 0 <= days_passed <= 5:
+            has_ads = True
+            active_ads_text += (
+                f"- Канал: {ad['channel']} ({ad['subs']} подп.), Куплено: {ad['date']}, "
+                f"Стоимость: {ad['cost']} руб. (Прошло дней мониторинга: {days_passed}/5)\n"
+                f"В этот 5-дневный промежуток идет активный трекинг прихода пользователей и чеков.\n"
+            )
+            
+    if not has_ads:
+        return "В последние 5 дней реклама не закупалась.\n"
+    return active_ads_text
+
+
+
+
+
 
 def get_yookassa_stats(start_date: datetime.datetime, end_date: datetime.datetime = None):
     try:
@@ -139,19 +181,24 @@ async def cmd_start(message: Message):
     await message.answer("Добро пожаловать в ИИ-бухгалтерию VPN бота с тарифным анализом!", reply_markup=get_main_keyboard())
 
 # 1. КНОПКА: Общая статистика с ИИ-анализом тарифов
+# 1. КНОПКА: Общая статистика с ИИ-анализом тарифов и рекламы
 @dp.message(F.text == "📊 Статистика + Анализ ИИ")
 async def show_general_stats(message: Message):
     if message.from_user.id != ADMIN_ID: return
-    await message.answer("🔄 Запрашиваю чеки из ЮKassa и анализирую историю...")
+    await message.answer("🔄 Запрашиваю чеки из ЮKassa и анализирую историю рекламы...")
     
     now = datetime.datetime.now()
+    
+    # Собираем данные и количество чеков по периодам
     cnt_day, sum_day = get_yookassa_stats(now.replace(hour=0, minute=0, second=0, microsecond=0), now)
     cnt_week, sum_week = get_yookassa_stats(now - datetime.timedelta(days=7), now)
     cnt_month, sum_month = get_yookassa_stats(now - datetime.timedelta(days=30), now)
     
+    # За ВСЁ время
     past_far = datetime.datetime(2020, 1, 1)
     cnt_all, sum_all = get_yookassa_stats(past_far, now)
     
+    # Работа с пользователями
     today_str = now.strftime("%Y-%m-%d")
     users_today = db["users"].get(today_str, "Не введено")
     
@@ -162,9 +209,14 @@ async def show_general_stats(message: Message):
             users_month_ago = db["users"][past_date]
             break
 
+    # Получаем контекст по недавно закупленной рекламе (за 5 дней)
+    ads_context = get_active_ads_context(now)
+
+    # Промпт для ИИ: передаем финансы, чеки, пользователей, тарифы и рекламу
     ai_prompt = (
         f"Ты — финансовый ИИ-бухгалтер и продуктовый аналитик Telegram VPN-сервиса.\n"
-        f"Проанализируй выручку, количество чеков и базу пользователей, опираясь на тарифную сетку проекта.\n\n"
+        f"Проанализируй выручку, количество чеков, базу пользователей и окупаемость рекламы.\n\n"
+        f"{ads_context}\n"
         f"{TARIFF_INFO}\n"
         f"Данные из ЮKassa:\n"
         f"- За сегодня: {sum_day} руб. (Чеков: {cnt_day})\n"
@@ -174,7 +226,9 @@ async def show_general_stats(message: Message):
         f"Данные пользователей:\n"
         f"- Сейчас в боте: {users_today}\n"
         f"- Было месяц назад: {users_month_ago}\n\n"
-        f"Напиши краткий аудит. Посчитай средний чек (Выручка/Чеки за разные периоды) и предположи, какие тарифы сейчас приносят больше всего денег. Дай 2 практических совета по маркетингу или оптимизации цен."
+        f"Напиши краткий аудит. Посчитай средний чек. Если есть активная реклама в 5-дневном промежутке, "
+        f"оцени, насколько выросли продажи и пользователи с момента её закупки, и сделай вывод, "
+        f"окупается ли интеграция (сравни затраты на рекламу с приросшей выручкой)."
     )
     
     ai_analysis = await get_ai_response(ai_prompt)
@@ -186,9 +240,10 @@ async def show_general_stats(message: Message):
         f"📉 <b>30 дней:</b> {cnt_month} чек(ов) | <code>{sum_month:.2f} руб.</code>\n"
         f"💎 <b>ЗА ВСЁ ВРЕМЯ:</b> {cnt_all} чек(ов) | <code>{sum_all:.2f} руб.</code>\n\n"
         f"👥 <b>Юзеров сегодня:</b> {users_today} (Месяц назад: {users_month_ago})\n\n"
-        f"🤖 <b>Характеристика от ИИ:</b>\n{ai_analysis}"
+        f"🤖 <b>Характеристика и маркетинг-аудит ИИ:</b>\n{ai_analysis}"
     )
     await message.answer(text, parse_mode="HTML")
+
 
 # 2. КНОПКА: График недели
 @dp.message(F.text == "📈 Визуальный график недели")
@@ -300,6 +355,123 @@ async def save_users_count(message: Message, state: FSMContext):
     
     await state.clear()
     await message.answer(f"✅ Данные успешно внесены в бухгалтерию за {today_str}.", reply_markup=get_main_keyboard())
+
+
+
+
+
+
+import pandas as pd  # Будет установлена автоматически
+
+
+
+# КНОПКА: 📥 Выгрузка файла для Google Таблиц
+@dp.message(F.text == "📥 Выгрузить отчет для Google Таблиц")
+async def export_to_google_sheets(message: Message):
+    if message.from_user.id != ADMIN_ID: return
+    
+    await message.answer("📊 Собираю транзакции из ЮKassa за последние 30 дней для таблицы...")
+    
+    try:
+        now = datetime.datetime.now()
+        start_date = now - datetime.timedelta(days=30)
+        
+        # Получаем транзакции из ЮKassa
+        cursor = Payment.list({
+            "status": "succeeded",
+            "created_at.gte": start_date.isoformat(),
+            "limit": 100
+        })
+        
+        data_list = []
+        for payment in cursor.items:
+            data_list.append({
+                "Дата и Время": datetime.datetime.strptime(payment.created_at[:19], "%Y-%m-%dT%H:%M:%S").strftime("%d.%m.%Y %H:%M"),
+                "Сумма (руб)": float(payment.amount.value),
+                "ID Платежа": payment.id,
+                "Валюта": payment.amount.currency,
+                "Статус": "Успешно"
+            })
+            
+        if not data_list:
+            return await message.answer("За последние 30 дней не найдено успешных оплат для выгрузки.")
+            
+        # Создаем датафрейм
+        df = pd.DataFrame(data_list)
+        
+        # Сохраняем в CSV с кодировкой, которую легко читает Excel и Google Таблицы на iPhone
+        file_path = "yookassa_report.csv"
+        df.to_csv(file_path, index=False, encoding="utf-8-sig", sep=",")
+        
+        # Отправляем файл в телеграм
+        document = FSInputFile(file_path)
+        await message.answer_document(
+            document=document, 
+            caption="✅ Файл готов! Откройте его на Айфоне через приложение 'Google Таблицы'."
+        )
+        
+        # Чистим сервер
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            
+    except Exception as e:
+        logging.error(f"Ошибка выгрузки таблицы: {e}")
+        await message.answer("❌ Не удалось сгенерировать файл отчета.")
+
+# КНОПКА: 📢 Начало процесса добавления рекламы
+@dp.message(F.text == "📢 Добавить закупку рекламы")
+async def start_ad_reg(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID: return
+    await message.answer("Введите НАЗВАНИЕ или ССЫЛКУ на телеграм-канал, где купили рекламу:")
+    await state.set_state(AdStates.waiting_for_channel)
+
+@dp.message(AdStates.waiting_for_channel)
+async def process_ad_channel(message: Message, state: FSMContext):
+    await state.update_data(channel=message.text)
+    await message.answer("Сколько ПОДПИСЧИКОВ в этом канале? (Введите только число):")
+    await state.set_state(AdStates.waiting_for_subs)
+
+@dp.message(AdStates.waiting_for_subs)
+async def process_ad_subs(message: Message, state: FSMContext):
+    if not message.text.isdigit():
+        return await message.answer("Пожалуйста, введите корректное число подписчиков.")
+    await state.update_data(subs=int(message.text))
+    await message.answer("Сколько СТОИЛА интеграция в рублях? (Введите только число):")
+    await state.set_state(AdStates.waiting_for_cost)
+
+@dp.message(AdStates.waiting_for_cost)
+async def process_ad_cost(message: Message, state: FSMContext):
+    if not message.text.isdigit():
+        return await message.answer("Пожалуйста, введите корректную стоимость числом.")
+        
+    user_data = await state.get_data()
+    cost = int(message.text)
+    today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+    
+    # Сохраняем в нашу базу json бухгалтерии
+    if "ads" not in db:
+        db["ads"] = []
+        
+    db["ads"].append({
+        "channel": user_data["channel"],
+        "subs": user_data["subs"],
+        "cost": cost,
+        "date": today_str
+    })
+    save_db(db)
+    
+    await state.clear()
+    await message.answer(
+        f"✅ Реклама успешно добавлена!\n"
+        f"📢 Канал: {user_data['channel']}\n"
+        f"👥 Подписчиков: {user_data['subs']}\n"
+        f"💰 Цена: {cost} руб.\n\n"
+        f"⏱ В течение 5 дней ИИ будет автоматически мониторить окупаемость этой интеграции при просмотре общей статистики!",
+        reply_markup=get_main_keyboard()
+    )
+
+
+
 
 async def main():
     await dp.start_polling(bot)
