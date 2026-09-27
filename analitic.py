@@ -1,8 +1,35 @@
-
-
-
-import asyncio
+import sys
+import subprocess
 import logging
+
+# Выставляем базовые логи, чтобы видеть процесс установки в консоли хостинга
+logging.basicConfig(level=logging.INFO)
+
+# Список библиотек, которые кровь из носу нужны нашему боту
+REQUIRED_PACKAGES = {
+    "aiogram": "aiogram>=3.0.0",
+    "yookassa": "yookassa",
+    "openai": "openai",
+    "aiogram_calendar": "aiogram-calendar==0.5.0"  # фиксируем рабочую версию под aiogram 3
+}
+
+# Автоматическая проверка и установка библиотек «на лету»
+for module_name, pip_name in REQUIRED_PACKAGES.items():
+    try:
+        __import__(module_name)
+    except ImportError:
+        logging.info(f"🚀 Библиотека {module_name} не найдена. Устанавливаю {pip_name} через subprocess...")
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", pip_name])
+            logging.info(f"✅ Библиотека {pip_name} успешно установлена!")
+        except Exception as e:
+            logging.error(f"❌ Ошибка при установке {pip_name}: {e}")
+            sys.exit(1)
+
+# =======================================================================
+# ТЕПЕРЬ ВСЕ ИМПОРТЫ ПРОЙДУТ БЕЗ ОШИБОК, ТАК КАК БИБЛИОТЕКИ УЖЕ УСТАНОВЛЕНЫ
+# =======================================================================
+import asyncio
 import datetime
 import json
 import os
@@ -15,6 +42,8 @@ from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
 
 from yookassa import Configuration, Payment
 from openai import AsyncOpenAI
+
+
 
 # ЮKassa
 Configuration.account_id = '1364937'
