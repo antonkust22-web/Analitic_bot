@@ -58,26 +58,21 @@ AI_API_KEY = "sk-HegJD6oKibjWjeBEfTq3PK7AlSqSFEwh"
 AI_BASE_URL = "https://proxyapi.ru"  # Измените на URL вашего провайдера
 # =======================================================================
 
-logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
-
 ai_client = AsyncOpenAI(api_key=AI_API_KEY, base_url=AI_BASE_URL)
-
-# Файл базы данных для "бухгалтерии"
 DB_FILE = "accounting.json"
 
 def load_db():
     if os.path.exists(DB_FILE):
         with open(DB_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    return {"users": {}, "notes": {}}
+    return {"users": {}}
 
 def save_db(data):
     with open(DB_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
-# Инициализируем локальную память
 db = load_db()
 
 class BotStates(StatesGroup):
@@ -87,21 +82,22 @@ def get_main_keyboard():
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="📊 Статистика + Анализ ИИ")],
+            [KeyboardButton(text="📈 Визуальный график недели")],
             [KeyboardButton(text="📅 Календарь (День + Анализ)")],
             [KeyboardButton(text="👥 Ввести кол-во пользователей")]
         ],
         resize_keyboard=True
     )
 
-# Функция запроса к ЮKassa
-def get_yookassa_stats(start_date: datetime.datetime, end_date: datetime.datetime):
+def get_yookassa_stats(start_date: datetime.datetime, end_date: datetime.datetime = None):
     try:
-        cursor = Payment.list({
-            "created_at.gte": start_date.isoformat(),
-            "created_at.lte": end_date.isoformat(),
-            "status": "succeeded",
-            "limit": 100
-        })
+        params = {"status": "succeeded", "limit": 100}
+        if start_date:
+            params["created_at.gte"] = start_date.isoformat()
+        if end_date:
+            params["created_at.lte"] = end_date.isoformat()
+            
+        cursor = Payment.list(params)
         total_amount = 0.0
         count = 0
         for payment in cursor.items:
@@ -112,7 +108,6 @@ def get_yookassa_stats(start_date: datetime.datetime, end_date: datetime.datetim
         logging.error(f"Ошибка ЮKassa: {e}")
         return 0, 0.0
 
-# Функция безопасного обращения к ИИ
 async def get_ai_response(prompt: str) -> str:
     try:
         response = await ai_client.chat.completions.create(
@@ -121,44 +116,35 @@ async def get_ai_response(prompt: str) -> str:
             temperature=0.7
         )
         reply = response.choices.message.content
-        
-        # Строгая проверка: если в ответе ИИ содержится HTML-код ошибки ProxyAPI
         if "next-error-h1" in reply or "404" in reply or "page could not be found" in reply.lower():
             return "❌ <i>Не оплачено / Нет доступа к ИИ (проверьте баланс в ProxyAPI)</i>"
-            
         return reply
     except Exception as e:
         logging.error(f"Ошибка ИИ: {e}")
         return "❌ <i>Не оплачено / Нет доступа к ИИ (проверьте баланс в ProxyAPI)</i>"
 
-
-# Команда /start
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     if message.from_user.id != ADMIN_ID: return
-    await message.answer("Добро пожаловать в ИИ-бухгалтерию VPN бота!", reply_markup=get_main_keyboard())
+    await message.answer("Добро пожаловать в ИИ-бухгалтерию VPN бота с визуальными графиками!", reply_markup=get_main_keyboard())
 
-# 1. КНОПКА: Общая статистика с ИИ-анализом
+# 1. КНОПКА: Текстовый отчет + ИИ
 @dp.message(F.text == "📊 Статистика + Анализ ИИ")
 async def show_general_stats(message: Message):
     if message.from_user.id != ADMIN_ID: return
-    
-    await message.answer("🔄 Собираю данные из ЮKassa и архива бухгалтерии...")
+    await message.answer("🔄 Запрашиваю чеки из ЮKassa и анализирую историю...")
     
     now = datetime.datetime.now()
+    cnt_day, sum_day = get_yookassa_stats(now.replace(hour=0, minute=0, second=0, microsecond=0), now)
+    cnt_week, sum_week = get_yookassa_stats(now - datetime.timedelta(days=7), now)
+    cnt_month, sum_month = get_yookassa_stats(now - datetime.timedelta(days=30), now)
     
-    # Считаем финансовые периоды
-    _, sum_day = get_yookassa_stats(now.replace(hour=0, minute=0, second=0, microsecond=0), now)
-    _, sum_week = get_yookassa_stats(now - datetime.timedelta(days=7), now)
-    _, sum_month = get_yookassa_stats(now - datetime.timedelta(days=30), now)
+    past_far = datetime.datetime(2020, 1, 1)
+    cnt_all, sum_all = get_yookassa_stats(past_far, now)
     
-    # Вытягиваем исторические данные пользователей из json для контекста ИИ
     today_str = now.strftime("%Y-%m-%d")
-    month_ago_str = (now - datetime.timedelta(days=30)).strftime("%Y-%m-%d")
-    
     users_today = db["users"].get(today_str, "Не введено")
     
-    # Ищем любую запись месячной давности для сравнения бухгалтерии
     users_month_ago = "Нет данных"
     for i in range(25, 35):
         past_date = (now - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
@@ -166,90 +152,163 @@ async def show_general_stats(message: Message):
             users_month_ago = db["users"][past_date]
             break
 
-    # Промпт для глобального отчета
     ai_prompt = (
         f"Ты — финансовый ИИ-бухгалтер VPN-сервиса.\n"
-        f"Проанализируй общую динамику проекта и дай короткое бизнес-заключение.\n\n"
-        f"Данные бухгалтерии:\n"
-        f"- Выручка за сегодня: {sum_day} руб.\n"
-        f"- Выручка за 7 дней: {sum_week} руб.\n"
-        f"- Выручка за 30 дней: {sum_month} руб.\n"
-        f"- Текущие пользователи: {users_today}\n"
-        f"- Пользователи около месяца назад: {users_month_ago}\n\n"
-        f"Напиши 3 предложения: оценку текущей доходности и сравнение с прошлым месяцем."
+        f"Проанализируй выручку, количество чеков и базу пользователей.\n\n"
+        f"Данные из ЮKassa:\n"
+        f"- За сегодня: {sum_day} руб. (Чеков: {cnt_day})\n"
+        f"- За 7 дней: {sum_week} руб. (Чеков: {cnt_week})\n"
+        f"- За 30 дней: {sum_month} руб. (Чеков: {cnt_month})\n"
+        f"- ЗА ВСЁ ВРЕМЯ: {sum_all} руб. (Общее число чеков: {cnt_all})\n\n"
+        f"Данные пользователей:\n"
+        f"- Сейчас в боте: {users_today}\n"
+        f"- Было месяц назад: {users_month_ago}\n\n"
+        f"Напиши краткий аудит доходности. Обрати внимание на средний чек и активность продаж."
     )
     
     ai_analysis = await get_ai_response(ai_prompt)
     
     text = (
-        f"<b>💰 Бухгалтерия за периоды:</b>\n\n"
-        f"💵 <b>Сегодня:</b> <code>{sum_day:.2f} руб.</code>\n"
-        f"🗓 <b>7 дней:</b> <code>{sum_week:.2f} руб.</code>\n"
-        f"📉 <b>30 дней:</b> <code>{sum_month:.2f} руб.</code>\n"
+        f"<b>💰 Финансовая бухгалтерия (Чеки + Выручка):</b>\n\n"
+        f"💵 <b>Сегодня:</b> {cnt_day} чек(ов) | <code>{sum_day:.2f} руб.</code>\n"
+        f"🗓 <b>7 дней:</b> {cnt_week} чек(ов) | <code>{sum_week:.2f} руб.</code>\n"
+        f"📉 <b>30 дней:</b> {cnt_month} чек(ов) | <code>{sum_month:.2f} руб.</code>\n"
+        f"💎 <b>ЗА ВСЁ ВРЕМЯ:</b> {cnt_all} чек(ов) | <code>{sum_all:.2f} руб.</code>\n\n"
         f"👥 <b>Юзеров сегодня:</b> {users_today} (Месяц назад: {users_month_ago})\n\n"
         f"🤖 <b>Характеристика от ИИ:</b>\n{ai_analysis}"
     )
     await message.answer(text, parse_mode="HTML")
 
-# 2. КНОПКА: Вызов календаря
+# 2. КНОПКА: 📈 Создание реального фото-графика
+@dp.message(F.text == "📈 Визуальный график недели")
+async def send_visual_chart(message: Message):
+    if message.from_user.id != ADMIN_ID: return
+    
+    await message.answer("📊 Генерирую фото с графиком продаж из ЮKassa...")
+    
+    now = datetime.datetime.now()
+    dates = []
+    revenues = []
+    checks = []
+    
+    # Собираем данные за каждый из последних 7 дней по отдельности
+    for i in range(6, -1, -1):
+        day = now - datetime.timedelta(days=i)
+        start_day = datetime.datetime.combine(day.date(), datetime.time.min)
+        end_day = datetime.datetime.combine(day.date(), datetime.time.max)
+        
+        cnt, total = get_yookassa_stats(start_day, end_day)
+        
+        dates.append(day.strftime("%d.%m"))
+        revenues.append(total)
+        checks.append(cnt)
+        
+    # Рисуем график с помощью matplotlib
+    plt.figure(figsize=(8, 4.5))
+    plt.plot(dates, revenues, marker='o', color='#007aff', linewidth=2.5, label='Выручка (руб.)')
+    
+    # Стилизация
+    plt.title('Динамика продаж VPN за последние 7 дней', fontsize=14, fontweight='bold', pad=15)
+    plt.xlabel('Дата', fontsize=10, labelpad=10)
+    plt.ylabel('Выручка (руб.)', fontsize=10, labelpad=10)
+    plt.grid(True, linestyle='--', alpha=0.5)
+    
+    # Добавляем текстовые подписи над каждой точкой (Сумма + Чеки)
+    for index, (x, y) in enumerate(zip(dates, revenues)):
+        plt.text(index, y + (max(revenues)*0.03 if max(revenues) > 0 else 10), 
+                 f"{int(y)} ₽\n({checks[index]} ч.)", 
+                 ha='center', fontsize=9, fontweight='semibold', color='#333333')
+                 
+    # Запас по высоте сверху, чтобы подписи не вылезали за рамку
+    if max(revenues) > 0:
+        plt.ylim(0, max(revenues) * 1.25)
+        
+    plt.tight_layout()
+    
+    # Сохраняем во временный файл картинку
+    chart_path = "weekly_chart.png"
+    plt.savefig(chart_path, dpi=200)
+    plt.close()
+    
+    # Подсчитываем общие цифры за этот период для подписи под фото
+    total_week_sum = sum(revenues)
+    total_week_checks = sum(checks)
+    
+    caption_text = (
+        f"📊 <b>Ваш недельный отчет в графике:</b>\n\n"
+        f"💰 Всего за 7 дней: <code>{total_week_sum:.2f} руб.</code>\n"
+        f"🧾 Всего успешных чеков: {total_week_checks} шт.\n"
+        f"💳 Средний чек за неделю: <code>{total_week_sum / total_week_checks if total_week_checks > 0 else 0:.2f} руб.</code>"
+    )
+    
+    # Отправляем фото пользователю в Telegram
+    photo = FSInputFile(chart_path)
+    await message.answer_photo(photo=photo, caption=caption_text, parse_mode="HTML")
+    
+    # Удаляем картинку с сервера после отправки
+    if os.path.exists(chart_path):
+        os.remove(chart_path)
+
+# 3. КНОПКА: Календарь
 @dp.message(F.text == "📅 Календарь (День + Анализ)")
 async def show_calendar(message: Message):
     if message.from_user.id != ADMIN_ID: return
-    await message.answer("Выберите день для детального ИИ-анализа:", reply_markup=await SimpleCalendar().start_calendar())
+    await message.answer("Выберите день на календаре:", reply_markup=await SimpleCalendar().start_calendar())
 
-# Обработка выбора дня на календаре
+# Обработка календаря
 @dp.callback_query(SimpleCalendarCallback.filter())
 async def process_calendar(callback_query: CallbackQuery, callback_data: SimpleCalendarCallback):
     selected, date = await SimpleCalendar().process_selection(callback_query, callback_data)
     if selected:
-        await callback_query.message.answer("🔍 Извлекаю транзакции за выбранный день и отправляю ИИ...")
+        await callback_query.message.answer("🔍 Считаю чеки за выбранные сутки...")
         
-        start_date = datetime.datetime.combine(date, datetime.time.min)
-        end_date = datetime.datetime.combine(date, datetime.time.max)
+        # Приводим к объекту даты и формируем временные границы суток
+        target_date = date.date() if hasattr(date, 'date') else date
+        start_date = datetime.datetime.combine(target_date, datetime.time.min)
+        end_date = datetime.datetime.combine(target_date, datetime.time.max)
         
         cnt, total = get_yookassa_stats(start_date, end_date)
-        date_str = date.strftime("%Y-%m-%d")
+        date_str = target_date.strftime("%Y-%m-%d")
         users = db["users"].get(date_str, "Не зафиксировано")
         
-        # Промпт для конкретного дня
         ai_prompt = (
-            f"Оцени результаты работы VPN-бота за конкретный день: {date_str}.\n"
-            f"Выручка за день: {total} рублей. Количество покупок: {cnt}. Активных юзеров в системе: {users}.\n"
-            f"Дай одну критическую или похвальную фразу по этим результатам."
+            f"Оцени результаты VPN-бота за конкретный день: {date_str}.\n"
+            f"Выручка: {total} руб. Количество оплаченных чеков: {cnt}. Активных пользователей: {users}.\n"
+            f"Дай одну емкую фразу-заключение по этому дню."
         )
         
         ai_analysis = await get_ai_response(ai_prompt)
         
         text = (
-            f"📊 <b>Отчет за {date.strftime('%d.%m.%Y')}:</b>\n\n"
-            f"💳 Оплат: {cnt} шт.\n"
-            f"💵 Выручка: <code>{total:.2f} руб.</code>\n"
+            f"📊 <b>Отчет за {target_date.strftime('%d.%m.%Y')}:</b>\n\n"
+            f"💳 Количество чеков: {cnt} шт.\n"
+            f"💵 Выручка за день: <code>{total:.2f} руб.</code>\n"
             f"👥 Пользователи: {users}\n\n"
             f"🤖 <b>Характеристика от ИИ:</b>\n{ai_analysis}"
         )
         await callback_query.message.answer(text, parse_mode="HTML")
 
-# 3. КНОПКА: Запись количества пользователей (Бухгалтерия)
+# 4. КНОПКА: Ввод пользователей
 @dp.message(F.text == "👥 Ввести кол-во пользователей")
 async def ask_users_count(message: Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID: return
+    if message.from_user.id != ADMIN_ID: 
+        return
     await message.answer("Введите текущее общее число пользователей в боте:")
     await state.set_state(BotStates.waiting_for_users)
 
 @dp.message(BotStates.waiting_for_users)
 async def save_users_count(message: Message, state: FSMContext):
     if not message.text.isdigit():
-        return await message.answer("Введите число.")
+        return await message.answer("Введите корректное число.")
         
     count = int(message.text)
     today_str = datetime.datetime.now().strftime("%Y-%m-%d")
     
-    # Записываем в базу данных и сохраняем в файл json
     db["users"][today_str] = count
     save_db(db)
     
     await state.clear()
-    await message.answer(f"✅ Данные сохранены в архив бухгалтерии на дату {today_str}.", reply_markup=get_main_keyboard())
+    await message.answer(f"✅ Данные успешно внесены в бухгалтерию за {today_str}.", reply_markup=get_main_keyboard())
 
 async def main():
     await dp.start_polling(bot)
@@ -257,3 +316,4 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 
+    
