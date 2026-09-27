@@ -45,6 +45,8 @@ from openai import AsyncOpenAI
 
 
 
+BOT_TOKEN = "8854994299:AAGZQXmJzDOkqSNeWaHqvoClcN80y7YEHYQ"
+
 # ЮKassa
 Configuration.account_id = '1364937'
 Configuration.secret_key = 'live_NW5JQaui3OuYMKglM-SrcNpOCRKfjAxuAozyl80nSiY'
