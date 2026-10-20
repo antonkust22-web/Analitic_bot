@@ -227,7 +227,8 @@ async def analyze_yookassa_health_and_churn() -> str:
         try:
             # Берем платежи за последние 3 часа и за предыдущие 3 часа (для сравнения)
             cursor_recent = await get_payments_list_async({"status": "succeeded", "limit": 100, "created_at.gte": three_hours_ago.isoformat()})
-            cursor_prior = await get_payments_list_async({"status": "succeeded", "limit": 100, "created_at.gte": 6_hours_ago.isoformat(), "created_at.lte": three_hours_ago.isoformat()})
+            cursor_prior = await get_payments_list_async({"status": "succeeded", "limit": 100, "created_at.gte":高度 six_hours_ago.isoformat(), "created_at.lte": three_hours_ago.isoformat()})
+
         except Exception as api_err:
             return f"🚨 <b>КРИТИЧЕСКИЙ СБОЙ ЮKASSA!</b>\n❌ Сервер API недоступен.\nОшибка: <code>{api_err}</code>"
 
