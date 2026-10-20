@@ -268,8 +268,8 @@ async def analyze_yookassa_health_and_churn() -> str:
             counts = {"daily": 0, "1_month": 0, "3_months": 0, "5_months": 0, "1_year": 0, "custom": 0}
             for p in payment_list:
                 val = int(float(p.amount.value))
-                # ТЕПЕРЬ ВСЁ ИСПРАВЛЕНО: проверяем подневные платежи (10, 20, 30 рублей)
-                if val in: 
+                # Исправлено: проверяем подневные платежи через обычное равенство или список
+                if val == 10 or val == 20 or val == 30: 
                     counts["daily"] += 1
                 elif 140 <= val <= 160: 
                     counts["1_month"] += 1
@@ -282,6 +282,7 @@ async def analyze_yookassa_health_and_churn() -> str:
                 else: 
                     counts["custom"] += 1
             return counts
+
 
 
 
