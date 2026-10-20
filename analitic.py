@@ -268,13 +268,21 @@ async def analyze_yookassa_health_and_churn() -> str:
             counts = {"daily": 0, "1_month": 0, "3_months": 0, "5_months": 0, "1_year": 0, "custom": 0}
             for p in payment_list:
                 val = int(float(p.amount.value))
-                if val in: counts["daily"] += 1
-                elif 140 <= val <= 160: counts["1_month"] += 1
-                elif 340 <= val <= 360: counts["3_months"] += 1
-                elif 640 <= val <= 660: counts["5_months"] += 1
-                elif 1080 <= val <= 1120: counts["1_year"] += 1
-                else: counts["custom"] += 1
+                # Исправлено: проверяем, равен ли чек подневному тарифу (10 руб) или его кратным дням
+                if val in: 
+                    counts["daily"] += 1
+                elif 140 <= val <= 160: 
+                    counts["1_month"] += 1
+                elif 340 <= val <= 360: 
+                    counts["3_months"] += 1
+                elif 640 <= val <= 660: 
+                    counts["5_months"] += 1
+                elif 1080 <= val <= 1120: 
+                    counts["1_year"] += 1
+                else: 
+                    counts["custom"] += 1
             return counts
+
 
         t_current = classify_tariffs(m1_pays)
         t_past = classify_tariffs(m2_pays)
